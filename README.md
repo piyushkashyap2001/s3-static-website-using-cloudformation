@@ -28,7 +28,7 @@ This repository contains an AWS Cloudformation template and other necessary lamb
 
 ## How to run
 
-**Step 1** - As the lamdba function in the main template uses a S3 bucket to store the code, Create a S3 bucket first using the template "websiteLambdaHolderBucket.yaml" either from AWS console or by below AWS CLI command.
+**Step 1** - As the lamdba functions described in the main cloudformation template uses a S3 bucket to store the code, Create a S3 bucket first using the template "websiteLambdaHolderBucket.yaml" either from AWS console or by below AWS CLI command.
 
 ```bash
 aws cloudformation create-stack --stack-name {stackname} --template-body file://{path_to_template_file}
