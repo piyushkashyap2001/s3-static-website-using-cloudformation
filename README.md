@@ -1,5 +1,6 @@
 # s3-static-website-using-cloudformation
-Hosting static website on S3 using Cloudformation
+## Overview
+This repository constains an AWS Cloudformation template and other necessary lambda functions to automate infrastructure deployment to host a static website. This cloudformation stack also creates a CI/CD pipeline for automated deployment of static website and it also setups a Elasticsearch service for S3 access logs analysis and visualization .
 ## Architecture
 ![Preview](https://raw.githubusercontent.com/piyushkashyap2001/s3-static-website-using-cloudformation/master/architecture.png)
 ## Prerequisites
