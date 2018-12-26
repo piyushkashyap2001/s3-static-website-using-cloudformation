@@ -1,0 +1,15 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: |
+  A bucket to store lambda function source codes.
+
+Resources:
+  LambdaCodeStoreBucket:
+    Type: "AWS::S3::Bucket"
+    DeletionPolicy: Retain
+
+Outputs:
+  BucketName:
+    Value: !Ref LambdaCodeStoreBucket
+    Description: Bucket name
+    Export:
+      Name: "LambdaCodeBucket"

@@ -1,0 +1,1140 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: |
+  Static web site stack with CodePipeline and CodeBuild deployment from 
+  CodeCommit repository. Includes redirect from www to base domain, access
+  logs written to S3, SSL via Amazon Certificate Manager, CloudFront CDN, and
+  Route 53 DNS entries. S3 access logs analysis and visualization using Elasticsearch and Kibana.
+
+Parameters:
+  # Domain: example-com
+  ProjectName:
+    Type: String
+    Description: "The project name"
+    MinLength: 4
+    MaxLength: 253
+    AllowedPattern: "[a-z0-9]+[-.a-z0-9]*"
+    ConstraintDescription: |
+      Provide a valid project name using only lowercase letters, 
+      numbers, and dash (-).
+
+  # Domain: example.com
+  DomainName:
+    Type: String
+    Description: "The base domain name for the web site (no 'www')"
+    MinLength: 4
+    MaxLength: 253
+    AllowedPattern: "[a-z0-9]+[-.a-z0-9]*(\\.[a-z][a-z]+)+"
+    ConstraintDescription: |
+      Provide a valid domain name using only lowercase letters, 
+      numbers, ., and dash (-)
+
+  DefaultTTL:
+    Type: Number
+    Description: "CloudFront default cache lifetime in seconds"
+    Default: 30
+
+  MinimumTTL:
+    Description: "CloudFront minimum cache lifetime in seconds"
+    Default: 5
+    Type: Number
+
+  PriceClass:
+    Description: "CloudFront price class. Default is US-only, PriceClass_All is worldwide but more expensive."
+    Default: PriceClass_100
+    AllowedValues:
+      - PriceClass_100
+      - PriceClass_200
+      - PriceClass_All
+    Type: String
+
+  LogExpirationInDays:
+    Description: "How long to hold site access logs in S3."
+    Default: 30
+    Type: Number
+
+  PreExistingLogsBucket:
+    Description: |
+      Optional pre-existing access logs bucket. 
+      Leave empty to have access logs bucket created and managed by this stack.
+    Type: String
+    Default: ""
+
+  PreExistingSiteBucket:
+    Description: |
+      Optional pre-existing website bucket.
+      Leave empty to have website bucket created and managed by this stack.
+    Type: String
+    Default: ""
+
+  PreExistingRedirectBucket:
+    Description: |
+      Optional pre-existing redirect bucket.
+      Leave empty to have redirect bucket created and managed by this stack.
+    Type: String
+    Default: ""
+
+  PreExistingCodeCommitRepository:
+    Description: |
+      Optional pre-existing CodeCommit repository. 
+      Leave empty to have repository created and managed by this stack.
+    Type: String
+    Default: ""
+
+  PreExistingCodePipelineBucket:
+    Description: |
+      Optional name of pre-existing CodePipeline artifact bucket.
+      Leave empty to have CodePipeline bucket created and managed by this stack.
+    Type: String
+    Default: ""
+
+  PreExistingHostedZoneDomain:
+    Description: |
+      Optional pre-existing Route 53 hosted zone. 
+      Leave empty to have hosted zone created and managed by this stack.
+    Type: String
+    Default: ""
+
+  PreExistingHostedZoneId:
+    Description: |
+      Optional pre-existing Route 53 hosted zone id. 
+      Fill it if you already have a hosted zone.
+      Leave empty to have hosted zone id created and managed by this stack.
+    Type: String
+    Default: ""
+
+  ESIndexExpirationinDays:
+    Description: How long to hold indexes in Elasticsearch.
+    Type: Number
+    Default: 30
+
+  PreExistingCertificate:
+    Description: |
+      Optional pre-existing Certificate. 
+      Leave empty to have certificate created and managed by this stack.
+    Type: String
+    Default: ""
+
+Conditions:
+  NeedsNewLogsBucket: !Equals [!Ref PreExistingLogsBucket, ""]
+  NeedsNewRedirectBucket: !Equals [!Ref PreExistingRedirectBucket, ""]
+  NeedsNewSiteBucket: !Equals [!Ref PreExistingSiteBucket, ""]
+  NeedsNewCodePipelineBucket: !Equals [!Ref PreExistingCodePipelineBucket, ""]
+  NeedsNewCodeCommitRepository:
+    !Equals [!Ref PreExistingCodeCommitRepository, ""]
+  NeedsNewHostedZone: !Equals [!Ref PreExistingHostedZoneDomain, ""]
+  NeedsNewCertificate: !Equals [!Ref PreExistingCertificate, ""]
+
+Mappings:
+  RegionMap:
+    ap-northeast-1:
+      S3hostedzoneID: "Z2M4EHUR26P7ZW"
+      websiteendpoint: "s3-website-ap-northeast-1.amazonaws.com"
+    ap-northeast-2:
+      S3hostedzoneID: "Z3W03O7B5YMIYP"
+      websiteendpoint: "s3-website.ap-northeast-2.amazonaws.com"
+    ap-south-1:
+      S3hostedzoneID: "Z11RGJOFQNVJUP"
+      websiteendpoint: "s3-website.ap-south-1.amazonaws.com"
+    ap-southeast-1:
+      S3hostedzoneID: "Z3O0J2DXBE1FTB"
+      websiteendpoint: "s3-website-ap-southeast-1.amazonaws.com"
+    ap-southeast-2:
+      S3hostedzoneID: "Z1WCIGYICN2BYD"
+      websiteendpoint: "s3-website-ap-southeast-2.amazonaws.com"
+    eu-central-1:
+      S3hostedzoneID: "Z21DNDUVLTQW6Q"
+      websiteendpoint: "s3-website.eu-central-1.amazonaws.com"
+    eu-west-1:
+      S3hostedzoneID: "Z1BKCTXD74EZPE"
+      websiteendpoint: "s3-website-eu-west-1.amazonaws.com"
+    sa-east-1:
+      S3hostedzoneID: "Z7KQH4QJS55SO"
+      websiteendpoint: "s3-website-sa-east-1.amazonaws.com"
+    us-east-1:
+      S3hostedzoneID: "Z3AQBSTGFYJSTF"
+      websiteendpoint: "s3-website-us-east-1.amazonaws.com"
+    us-east-2:
+      S3hostedzoneID: "Z2O1EMRO9K5GLX"
+      websiteendpoint: "s3-website.us-east-2.amazonaws.com"
+    us-west-1:
+      S3hostedzoneID: "Z2F56UZL2M1ACD"
+      websiteendpoint: "s3-website-us-west-1.amazonaws.com"
+    us-west-2:
+      S3hostedzoneID: "Z3BJ6K6RIION7M"
+
+Resources:
+  # Bucket for CloudFront and S3 access logs: logs-example-com
+  LogsBucket:
+    Condition: NeedsNewLogsBucket
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Sub "logs-${ProjectName}"
+      AccessControl: LogDeliveryWrite
+      LifecycleConfiguration:
+        Rules:
+          - Id: "LogExpirationRule"
+            Status: "Enabled"
+            ExpirationInDays: !Ref LogExpirationInDays
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: "s3:ObjectCreated:*"
+            Function: !GetAtt LogsToCloudwatchLambda.Arn
+    DeletionPolicy: Delete
+    DependsOn: PermissionForS3ToInvokeLogsToCloudwatchLambda
+
+  # Bucket to redirect to example.com: www.example.com
+  RedirectBucket:
+    Condition: NeedsNewRedirectBucket
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Sub "www.${DomainName}"
+      AccessControl: BucketOwnerFullControl
+      # logs.example.com/logs/s3/www.example.com/
+      LoggingConfiguration:
+        DestinationBucketName:
+          !If [NeedsNewLogsBucket, !Ref LogsBucket, !Ref PreExistingLogsBucket]
+        LogFilePrefix: !Sub "logs/s3/www.${DomainName}/"
+      WebsiteConfiguration:
+        RedirectAllRequestsTo:
+          HostName: !Ref DomainName
+          Protocol: https
+    DeletionPolicy: Delete
+
+  # Bucket for site content: example.com
+  SiteBucket:
+    Condition: NeedsNewSiteBucket
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Ref DomainName
+      AccessControl: PublicRead
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+      # logs.example.com/logs/s3/example.com/
+      LoggingConfiguration:
+        DestinationBucketName:
+          !If [NeedsNewLogsBucket, !Ref LogsBucket, !Ref PreExistingLogsBucket]
+        LogFilePrefix: !Sub "logs/s3/${DomainName}/"
+    DeletionPolicy: Delete
+
+  # Permission for s3 to invoke lambda which will fetch the logs from s3 and store in cloudwatch
+  PermissionForS3ToInvokeLogsToCloudwatchLambda:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !GetAtt LogsToCloudwatchLambda.Arn
+      Principal: "s3.amazonaws.com"
+      SourceArn: !Join ["", ["arn:aws:s3:::", !Sub "logs-${ProjectName}"]]
+
+  # Lambda to move logs from S3 logs bucket to cloudwatch
+  LogsToCloudwatchLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Lambda to move logs from S3 logs bucket to cloudwatch
+      Handler: readS3Logs.handler
+      Role: !GetAtt LogsToCloudwatchLambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Join
+          - ""
+          - - !ImportValue LambdaCodeBucket
+        S3Key: "lambdas/readS3Logs.zip"
+      Environment:
+        Variables:
+          S3_LOG_GROUP: !Ref SiteLogGroup
+          CF_LOG_GROUP: !Ref CloudfrontLogGroup
+      Timeout: 30
+      Runtime: nodejs6.10
+
+  # Role for Lambda to access objects within S3 Logs bucket
+  LogsToCloudwatchLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: [lambda.amazonaws.com] }
+            Action: ["sts:AssumeRole"]
+      Path: /
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: S3Policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "S3:GetObject"
+                  - "s3:PutObject"
+                  - "S3:DeleteObject"
+                Resource: !Sub "arn:aws:s3:::logs-${ProjectName}/*"
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "logs:GetLogEvents"
+                  - "logs:DescribeLogStreams"
+                Resource: "arn:aws:logs:*:*:*"
+
+  # Log group for s3 access logs
+  SiteLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: !Sub "${ProjectName}S3Logs"
+
+  # Log group for Cloudfront logs
+  CloudfrontLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: !Sub "${ProjectName}CFLogs"
+
+  # Git repository
+  CodeCommitRepository:
+    Condition: NeedsNewCodeCommitRepository
+    Type: "AWS::CodeCommit::Repository"
+    Properties:
+      RepositoryDescription: !Sub "Git repository for ${DomainName}"
+      RepositoryName: !Ref ProjectName
+    DeletionPolicy: Delete
+
+  # Role for CodeBuild
+  CodeBuildServiceRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "codebuild.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AWSCodeCommitFullAccess"
+        - "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+        - "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
+        - "arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess"
+
+  # CodeBuild Project
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Ref ProjectName
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: linuxContainer
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/ubuntu-base:14.04
+      Source:
+        Location: !Sub "https://git-codecommit.${AWS::Region}.amazonaws.com/v1/repos/${ProjectName}"
+        Type: CODECOMMIT
+      TimeoutInMinutes: 10
+
+  # Role for CodePipeline
+  CodePipelineRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "codepipeline.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AWSCodeCommitFullAccess"
+        - "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+        - "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
+        - "arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess"
+
+  # Bucket for CodePipeline artifact storage: codepipeline.example.com
+  CodePipelineBucket:
+    Condition: NeedsNewCodePipelineBucket
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Sub "codepipeline-${ProjectName}"
+      VersioningConfiguration:
+        Status: Enabled
+    DeletionPolicy: Delete
+
+  # CodePipeline for the static website
+  CodePipeline:
+    Type: "AWS::CodePipeline::Pipeline"
+    Properties:
+      Name: !Sub "${ProjectName}-codepipeline"
+      ArtifactStore:
+        Type: S3
+        Location:
+          !If [
+            NeedsNewCodePipelineBucket,
+            !Ref CodePipelineBucket,
+            !Ref PreExistingCodePipelineBucket,
+          ]
+      RestartExecutionOnUpdate: false
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: 1
+              Configuration:
+                RepositoryName:
+                  !If [
+                    NeedsNewCodeCommitRepository,
+                    !Ref ProjectName,
+                    !Ref PreExistingCodeCommitRepository,
+                  ]
+                BranchName: master
+              OutputArtifacts:
+                - Name: SiteSource
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: InvokeAction
+              InputArtifacts:
+                - Name: SiteSource
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: 1
+              Configuration:
+                ProjectName: !Ref ProjectName
+              OutputArtifacts:
+                - Name: SiteContent
+              RunOrder: 1
+
+  # Create and validate certificate role
+  CertificateLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Path: /
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: CFNCertificateDomainResourceRecordProvider
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - acm:RequestCertificate
+                  - acm:DescribeCertificate
+                  - acm:UpdateCertificateOptions
+                  - acm:DeleteCertificate
+                Resource:
+                  - "*"
+              - Effect: Allow
+                Action:
+                  - route53:ChangeResourceRecordSets
+                Resource:
+                  !Join [
+                    "",
+                    [
+                      "arn:aws:route53:::hostedzone/",
+                      !If [
+                        NeedsNewHostedZone,
+                        !Ref Route53HostedZone,
+                        !Ref PreExistingHostedZoneId,
+                      ],
+                    ],
+                  ]
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource: arn:aws:logs:*:*:*
+
+  # Lambda to create and validate certificate
+  CreateAndValidateCertificateLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Lambda to create and validate certificate
+      Handler: certificateValidator.handler
+      Role: !GetAtt CertificateLambdaRole.Arn
+      Code:
+        S3Bucket: !Join
+          - ""
+          - - !ImportValue LambdaCodeBucket
+        S3Key: "lambdas/certificateValidator.zip"
+      Environment:
+        Variables:
+          EXEC_THRESHOLD_SECONDS: 200
+      Timeout: 300
+      Runtime: nodejs6.10
+
+  # Certificate for HTTPS accesss through CloudFront
+  Certificate:
+    Type: Custom::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS
+      ServiceToken: !GetAtt CreateAndValidateCertificateLambda.Arn
+
+  # Check ACM Certificate validity status
+  IssuedCertificate:
+    Type: Custom::IssuedCertificate
+    Properties:
+      CertificateArn: !GetAtt Certificate.CertificateArn
+      LambdaArn: !GetAtt CreateAndValidateCertificateLambda.Arn
+      Region: !Ref "AWS::Region"
+      ServiceToken: !GetAtt CreateAndValidateCertificateLambda.Arn
+    DependsOn: DomainValidationRecord
+
+  # Generates DNS Record for certificate
+  CertificateDNSRecord:
+    Type: Custom::CertificateDNSRecord
+    Properties:
+      CertificateArn: !GetAtt Certificate.CertificateArn
+      ServiceToken: !GetAtt CreateAndValidateCertificateLambda.Arn
+
+  # Validates certificate by adding record in DNS.
+  DomainValidationRecord:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId:
+        !If [
+          NeedsNewHostedZone,
+          !Ref Route53HostedZone,
+          !Ref PreExistingHostedZoneId,
+        ]
+      RecordSets:
+        - Name: !GetAtt CertificateDNSRecord.Name
+          Type: "CNAME"
+          TTL: 300
+          ResourceRecords:
+            - !GetAtt CertificateDNSRecord.Value
+
+  # CDN serves S3 content over HTTPS for example.com
+  CloudFrontDistribution:
+    Type: "AWS::CloudFront::Distribution"
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Aliases:
+          - !Ref DomainName
+        DefaultRootObject: index.html
+        PriceClass: !Ref PriceClass
+        Origins:
+          - DomainName:
+              !Join [
+                "",
+                [
+                  !Ref DomainName,
+                  ".",
+                  !FindInMap [RegionMap, !Ref "AWS::Region", websiteendpoint],
+                ],
+              ]
+            Id: S3Origin
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          AllowedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          DefaultTTL: !Ref DefaultTTL
+          MinTTL: !Ref MinimumTTL
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          ViewerProtocolPolicy: redirect-to-https
+        # logs.example.com/logs/cloudfront/example.com/
+        Logging:
+          Bucket:
+            !Join [
+              "",
+              [
+                !If [
+                  NeedsNewLogsBucket,
+                  !Ref LogsBucket,
+                  !Ref PreExistingLogsBucket,
+                ],
+                ".s3.amazonaws.com",
+              ],
+            ]
+          Prefix: !Sub "logs/cloudfront/${DomainName}/"
+          IncludeCookies: false
+        ViewerCertificate:
+          AcmCertificateArn: !GetAtt IssuedCertificate.CertificateArn
+          SslSupportMethod: sni-only
+
+  # CDN serves S3 content over HTTPS for www.example.com
+  RedirectCloudFrontDistribution:
+    Type: "AWS::CloudFront::Distribution"
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Aliases:
+          - !If [
+              NeedsNewRedirectBucket,
+              !Ref RedirectBucket,
+              !Ref PreExistingRedirectBucket,
+            ]
+        PriceClass: PriceClass_100
+        Origins:
+          - DomainName:
+              !Join [
+                "",
+                [
+                  !If [
+                    NeedsNewRedirectBucket,
+                    !Ref RedirectBucket,
+                    !Ref PreExistingRedirectBucket,
+                  ],
+                  ".",
+                  !FindInMap [RegionMap, !Ref "AWS::Region", websiteendpoint],
+                ],
+              ]
+            Id: RedirectS3Origin
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+        DefaultCacheBehavior:
+          TargetOriginId: RedirectS3Origin
+          AllowedMethods:
+            - GET
+            - HEAD
+          DefaultTTL: !Ref DefaultTTL
+          MinTTL: !Ref MinimumTTL
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          ViewerProtocolPolicy: allow-all
+        # logs.example.com/logs/cloudfront/www.example.com/
+        Logging:
+          Bucket:
+            !Join [
+              "",
+              [
+                !If [
+                  NeedsNewLogsBucket,
+                  !Ref LogsBucket,
+                  !Ref PreExistingLogsBucket,
+                ],
+                ".s3.amazonaws.com",
+              ],
+            ]
+          Prefix: !Sub "logs/cloudfront/www.${DomainName}/"
+          IncludeCookies: false
+        ViewerCertificate:
+          AcmCertificateArn: !GetAtt IssuedCertificate.CertificateArn
+          SslSupportMethod: sni-only
+
+  # DNS: example.com, www.example.com
+  Route53HostedZone:
+    Condition: NeedsNewHostedZone
+    Type: "AWS::Route53::HostedZone"
+    Properties:
+      HostedZoneConfig:
+        Comment: !Sub "Created by CloudFormation stack: ${AWS::StackName}"
+      Name: !Ref DomainName
+    DeletionPolicy: Delete
+
+  Route53RecordSetGroup:
+    Type: "AWS::Route53::RecordSetGroup"
+    Properties:
+      HostedZoneId:
+        !If [NeedsNewHostedZone, !Ref Route53HostedZone, !Ref "AWS::NoValue"]
+      HostedZoneName:
+        !If [
+          NeedsNewHostedZone,
+          !Ref "AWS::NoValue",
+          !Sub "${PreExistingHostedZoneDomain}.",
+        ]
+      RecordSets:
+        # example.com
+        - Name: !Sub "${DomainName}."
+          Type: A
+          # Resolve to CloudFront distribution
+          AliasTarget:
+            HostedZoneId: Z2FDTNDATAQYW2 # CloudFront
+            DNSName: !GetAtt CloudFrontDistribution.DomainName
+        # www.example.com
+        - Name: !Sub "www.${DomainName}."
+          Type: A
+          # Resolve to Redirect CloudFront distribution
+          AliasTarget:
+            HostedZoneId: Z2FDTNDATAQYW2 # CloudFront
+            DNSName: !GetAtt RedirectCloudFrontDistribution.DomainName
+
+  # Elasticsearch for analysis and search to get insights from logs
+  SiteElasticsearch:
+    Type: "AWS::Elasticsearch::Domain"
+    Properties:
+      DomainName: !Sub "${ProjectName}"
+      AccessPolicies:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              AWS: !Join
+                - ":"
+                - - "arn:aws:iam:"
+                  - !Ref "AWS::AccountId"
+                  - "root"
+            Action:
+              - "es:ESHttpGet"
+            Resource: !Join
+              - ":"
+              - - "arn:aws:es"
+                - !Ref "AWS::Region"
+                - !Ref "AWS::AccountId"
+                - !Sub "domain/${ProjectName}/*"
+      EBSOptions:
+        EBSEnabled: true
+        VolumeSize: 10
+        VolumeType: "gp2"
+      ElasticsearchClusterConfig:
+        DedicatedMasterEnabled: false
+        InstanceCount: 1
+        InstanceType: "t2.small.elasticsearch"
+        ZoneAwarenessEnabled: false
+      ElasticsearchVersion: "6.3"
+
+  # Role for Lambda to transform logs and upload to elasticsearch
+  LogsToElasticsearchLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: [lambda.amazonaws.com] }
+            Action: ["sts:AssumeRole"]
+      Path: /
+      Policies:
+        - PolicyName: "ElasticSearchPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "es:*"
+                Resource: "arn:aws:es:*:*:*"
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                  - "logs:GetLogEvents"
+                  - "logs:DescribeLogStreams"
+                Resource: "arn:aws:logs:*:*:*"
+
+  # Lambda to move logs from cloudwatch to Elasticsearch
+  LogsToElasticsearchLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: "CloudWatch Logs to Amazon ES streaming"
+      Handler: "logsToElasticsearch.handler"
+      Role: !GetAtt LogsToElasticsearchLambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Join
+          - ""
+          - - !ImportValue LambdaCodeBucket
+        S3Key: "lambdas/logsToElasticsearch.zip"
+      Environment:
+        Variables:
+          ELASTICSEARCH_ENDPOINT: !GetAtt SiteElasticsearch.DomainEndpoint
+      Timeout: 60
+      Runtime: nodejs6.10
+
+  # Lambda Elasticsearch Execution Instance profile
+  LambdaElasticsearchExecutionInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: /
+      Roles:
+        - !Ref LogsToElasticsearchLambdaExecutionRole
+
+  # Permission to invoke Lambda to move Cloudwatch logs to Elasticsearch.
+  PermissionForCloudwatchLogsToInvokeLambda:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      FunctionName: !Ref LogsToElasticsearchLambda
+      Action: "lambda:InvokeFunction"
+      Principal: !Sub "logs.${AWS::Region}.amazonaws.com"
+      SourceArn: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+
+  # Cloudwatch logs filter
+  SubscriptionFilter:
+    Type: "AWS::Logs::SubscriptionFilter"
+    Properties:
+      LogGroupName: !Ref SiteLogGroup
+      FilterPattern: "[bucketOwner, bucket, timestamp, ip, requester, requesterId, operation, key, requesturi, httpStatus=4*, errorCode, byteSent, objectSize, totalTime, turnaroundTime, referrer, userAgent, versionId]"
+      DestinationArn: !GetAtt LogsToElasticsearchLambda.Arn
+    DependsOn: PermissionForCloudwatchLogsToInvokeLambda
+
+  # Cloudwatch Cloudfront logs filter
+  CFSubscriptionFilter:
+    Type: "AWS::Logs::SubscriptionFilter"
+    Properties:
+      LogGroupName: !Ref CloudfrontLogGroup
+      FilterPattern: "[date, time, xedgelocation, scbytes, cip, csmethod, csHost, csuristem, scstatus, csReferer, csUserAgent, csuriquery, csCookie, xedgeresulttype, xedgerequestid, xhostheader, csprotocol, csbytes, timetaken, xforwardedfor, sslprotocol, sslcipher, xedgeresponseresulttype, csprotocolversion, flestatus, fleencryptedfields]"
+      DestinationArn: !GetAtt LogsToElasticsearchLambda.Arn
+    DependsOn: PermissionForCloudwatchLogsToInvokeLambda
+
+  # Role for DeleteIndice Lambda to delete  logs from Elasticsearch
+  DeleteESIndexLambdaExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+      Policies:
+        - PolicyName: "root"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: "arn:aws:logs:*:*:*"
+              - Effect: "Allow"
+                Action:
+                  - "es:*"
+                Resource: "arn:aws:es:*:*:*"
+
+  # Permission for cloudwatch to invoke lambda which will delete elasticsearch indices
+  PermissionForScheduledRuleToInvokeLambda:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      FunctionName: !Ref DeleteIndiceJobLambda
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt OnceADayScheduledRule.Arn
+
+  # Rule for delete indice Lambda
+  OnceADayScheduledRule:
+    Type: "AWS::Events::Rule"
+    Properties:
+      Name: !Sub "once-a-day-${ProjectName}"
+      Description: "execute once a day"
+      State: "ENABLED"
+      ScheduleExpression: "rate(1 day)"
+      Targets:
+        - Arn: !GetAtt DeleteIndiceJobLambda.Arn
+          Id: "DeleteIndiceJobLambda"
+
+  # Delete Indice Lambda
+  DeleteIndiceJobLambda:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code:
+        S3Bucket: !Join
+          - ""
+          - - !ImportValue LambdaCodeBucket
+        S3Key: "lambdas/deleteElasticSearchIndices.zip"
+      Description: "keep elasticsearch only 30 days indices for free tier"
+      Environment:
+        Variables:
+          ELASTICSEARCH_ENDPOINT: !GetAtt SiteElasticsearch.DomainEndpoint
+          DAYS_TOKEEP: !Ref ESIndexExpirationinDays
+      Handler: "deleteElasticSearchIndices.handler"
+      Role: !GetAtt DeleteESIndexLambdaExecutionRole.Arn
+      Runtime: nodejs6.10
+      Timeout: 30
+
+  # Lambda instance profile
+  DeleteESindexLambdaExecutionInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: /
+      Roles:
+        - !Ref DeleteESIndexLambdaExecutionRole
+
+  # Creates a user pool in cognito for your app to auth against
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub "KibanaUsers${ProjectName}"
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          DeveloperOnlyAttribute: false
+          Mutable: true
+          Required: true
+
+  # Creates a federated Identity pool
+  CognitoIdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: !Sub "KibanaIDPool${ProjectName}"
+      AllowUnauthenticatedIdentities: true
+      # CognitoIdentityProviders:
+      #   - ClientId: !Ref UserPoolClient
+      #     ProviderName: !Sub "cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+
+  # Cognito policy to access ElasticSearch
+  CognitoAuthenticatedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "es:ESHttp*"
+              - "mobileanalytics:PutEvents"
+              - "cognito-sync:*"
+              - "cognito-identity:*"
+            Resource:
+              - "*"
+
+  # Create a role for authorized acces to AWS resources. Control what your user can access. This example only allows Lambda invocation
+  # Only allows users in the previously created Identity Pool
+  CognitoAuthenticatedRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: "sts:AssumeRoleWithWebIdentity"
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Condition:
+              StringEquals:
+                "cognito-identity.amazonaws.com:aud": !Ref CognitoIdentityPool
+              ForAnyValue:StringLike:
+                "cognito-identity.amazonaws.com:amr": authenticated
+      ManagedPolicyArns:
+        - !Ref CognitoAuthenticatedPolicy
+
+  # Create a role for unauthorized acces to AWS resources. Very limited access. Only allows users in the previously created Identity Pool
+  CognitoUnAuthenticatedRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Federated: "cognito-identity.amazonaws.com"
+            Action:
+              - "sts:AssumeRoleWithWebIdentity"
+            Condition:
+              StringEquals:
+                "cognito-identity.amazonaws.com:aud": !Ref CognitoIdentityPool
+              ForAnyValue:StringLike:
+                "cognito-identity.amazonaws.com:amr": unauthenticated
+      Policies:
+        - PolicyName: "CognitoUnauthorizedPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "mobileanalytics:PutEvents"
+                  - "cognito-sync:*"
+                Resource: "*"
+
+  # Assigns the roles to the Identity Pool
+  CognitoRoleAttachment:
+    Type: AWS::Cognito::IdentityPoolRoleAttachment
+    Properties:
+      IdentityPoolId: !Ref CognitoIdentityPool
+      Roles:
+        authenticated: !GetAtt CognitoAuthenticatedRole.Arn
+        unauthenticated: !GetAtt CognitoUnAuthenticatedRole.Arn
+
+  # Custom resource to create UserPool domain so that Kibana could use it for authentication.
+  CognitoUserPoolDomain:
+    Type: "Custom::CognitoUserPoolDomain"
+    Properties:
+      Domain: !Ref ProjectName
+      UserPoolId: !Ref CognitoUserPool
+      ServiceToken: !GetAtt CognitoUserPoolDomainLambda.Arn
+    DependsOn: CognitoUserPool
+
+  # Enable Cognito options for AWS Elasticsearch Kibana authentication.
+  SiteElasticsearchCognitoOption:
+    Type: "Custom::ElasticsearchCognitoOption"
+    Properties:
+      ESDomain: !Ref SiteElasticsearch
+      RoleArn: !GetAtt CognitoAccessForAmazonESRole.Arn
+      UserPoolId: !Ref CognitoUserPool
+      IdentityPoolId: !Ref CognitoIdentityPool
+      ServiceToken: !GetAtt CognitoUserPoolDomainLambda.Arn
+    DependsOn: SiteElasticsearch
+
+  # Lambda to create UserPool domain.
+  CognitoUserPoolDomainLambda:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Code:
+        S3Bucket: !Join
+          - ""
+          - - !ImportValue LambdaCodeBucket
+        S3Key: "lambdas/cognitoForES.zip"
+      Handler: cognitoForES.handler
+      Role: !GetAtt CognitoUserPoolDomainLambdaExecutionRole.Arn
+      Timeout: 300
+      Runtime: nodejs6.10
+
+  # Lambda Role for UserPool domain and update ES domain with cognito options
+  CognitoUserPoolDomainLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: [lambda.amazonaws.com] }
+            Action: ["sts:AssumeRole"]
+      Policies:
+        - PolicyName: "UserPoolDomainCognitoOptionsPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: "cognito-idp:CreateUserPoolDomain"
+                Resource: "arn:aws:cognito-idp:*:*:userpool/*"
+              - Effect: Allow
+                Action: "cognito-idp:DeleteUserPoolDomain"
+                Resource: "arn:aws:cognito-idp:*:*:userpool/*"
+              - Effect: Allow
+                Action: "cognito-idp:DescribeUserPoolDomain"
+                Resource: "*"
+              - Effect: "Allow"
+                Action:
+                  - "es:*"
+                Resource: "arn:aws:es:*:*:*"
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - "iam:GetRole"
+                  - "iam:PassRole"
+                Resource: "*"
+
+  # Lambda Cognito UserPool domain Instance profile
+  CognitoUserPoolDomainLambdaInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: /
+      Roles:
+        - !Ref CognitoUserPoolDomainLambdaExecutionRole
+
+  # Amazon Elasticsearch role for Kibana authentication.
+  CognitoAccessForAmazonESRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: [es.amazonaws.com] }
+            Action: ["sts:AssumeRole"]
+      Policies:
+        - PolicyName: "CognitoAccessForESPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "cognito-idp:DescribeUserPool"
+                  - "cognito-idp:CreateUserPoolClient"
+                  - "cognito-idp:DeleteUserPoolClient"
+                  - "cognito-idp:DescribeUserPoolClient"
+                  - "cognito-idp:AdminInitiateAuth"
+                  - "cognito-idp:AdminUserGlobalSignOut"
+                  - "cognito-idp:ListUserPoolClients"
+                  - "cognito-identity:DescribeIdentityPool"
+                  - "cognito-identity:UpdateIdentityPool"
+                  - "cognito-identity:SetIdentityPoolRoles"
+                  - "cognito-identity:GetIdentityPoolRoles"
+                Resource: "*"
+              - Effect: Allow
+                Action: "iam:PassRole"
+                Resource: "*"
+                Condition:
+                  StringLike:
+                    "iam:PassedToService": "cognito-identity.amazonaws.com"
+
+Outputs:
+  WebsiteURL:
+    Value: !GetAtt
+      - SiteBucket
+      - WebsiteURL
+    Description: URL for website hosted on S3
+  S3BucketSecureURL:
+    Value: !Join
+      - ""
+      - - "https://"
+        - !GetAtt
+          - SiteBucket
+          - DomainName
+    Description: HTTPS url of S3 bucket.
+  S3BucketName:
+    Value: !Ref SiteBucket
+    Description: Name of S3 bucket to hold website content.
+  GitCloneURL:
+    Value: !GetAtt CodeCommitRepository.CloneUrlHttp
+    Description: Code commit url for clone.
+  ElasticSearchDomain:
+    Value: !Join
+      - ""
+      - - "https://"
+        - !GetAtt
+          - SiteElasticsearch
+          - DomainEndpoint
+    Description: Domain endpoint of elasticsearch
+  KibanaEndpoint:
+    Value: !Join
+      - ""
+      - - "https://"
+        - !GetAtt
+          - SiteElasticsearch
+          - DomainEndpoint
+        - "/_plugin/kibana/"
+    Description: Kibana endpoint url
+  UserPoolId:
+    Value: !Ref CognitoUserPool
+    Description: UserPoolID of kibana users.
