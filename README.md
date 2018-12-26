@@ -1,6 +1,6 @@
 # s3-static-website-using-cloudformation
 Hosting static website on S3 using Cloudformation
-# Architecture
+## Architecture
 ![Preview](https://raw.githubusercontent.com/piyushkashyap2001/s3-static-website-using-cloudformation/master/architecture.png)
 ## Prerequisites
 
@@ -64,7 +64,7 @@ aws cognito-idp admin-create-user --user-pool-id {userpoolid} --username {userna
 
 - Finally login into Kibana using the credentials created in the above step and configure the Kibana to use the Elasticsearch indices.
 
-### Important Notes
+## Important Notes
 
 - As soon as the code is pushed to AWS Codecommit, AWS Codepipeline is triggered by the push , then it uses AWS CodeBuild to build the code & finally AWS CodeBuild copies the file to S3 site bucket. The static website code must have a buildspec.yml file at the root level of folder structure in order to have AWS CodeBuild install the dependencies and move the files to S3 site bucket.
 
