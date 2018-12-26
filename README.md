@@ -57,7 +57,7 @@ aws cloudformation describe-stack-events --stack-name {stackname}
 
 - Use AWS Codecommit url to clone the repository.
 - Replace the bucket name in buildspec.yml file with the site bucket name.
-- Create a new user profile in the user pool to access Kibana using following command.
+- Create a new user profile in the user pool to access Kibana using the following command.
 
 ```bash
 aws cognito-idp admin-create-user --user-pool-id {userpoolid} --username {username} --user-attributes Name=email_verified,Value=true,Name=email,Value={emailid}  --region {region} --temporary-password {temp password}
