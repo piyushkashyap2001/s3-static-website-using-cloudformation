@@ -1,6 +1,6 @@
 # s3-static-website-using-cloudformation
 ## Overview
-This repository constains an AWS Cloudformation template and other necessary lambda functions to automate infrastructure deployment to host a static website. This cloudformation stack also creates a CI/CD pipeline for automated deployment of static website and it also setups a Elasticsearch service for S3 access logs analysis and visualization .
+This repository contains an AWS Cloudformation template and other necessary lambda functions to automate infrastructure deployment to host a static website. This cloudformation stack also creates a CI/CD pipeline for automated deployment of static website and it also setups a Elasticsearch service for S3 access logs analysis and visualization .
 ## Architecture
 ![Preview](https://raw.githubusercontent.com/piyushkashyap2001/s3-static-website-using-cloudformation/master/architecture.png)
 ## Prerequisites
@@ -28,7 +28,7 @@ This repository constains an AWS Cloudformation template and other necessary lam
 
 ## How to run
 
-**Step 1** - As the lamdba function in the main template uses a S3 bucket to store the code, Create a S3 bucket first using this [template](https://github.com) either from AWS console or by below AWS CLI command.
+**Step 1** - As the lamdba function in the main template uses a S3 bucket to store the code, Create a S3 bucket first using the template "websiteLambdaHolderBucket.yaml" either from AWS console or by below AWS CLI command.
 
 ```bash
 aws cloudformation create-stack --stack-name {stackname} --template-body file://{path_to_template_file}
@@ -40,7 +40,7 @@ aws cloudformation create-stack --stack-name {stackname} --template-body file://
  aws s3 cp {folder path}/ s3://{bucketname}/lambdas/ --recursive
 ```
 
-**Step 3** - After that main stack can be created using this [template](https://github.com). It might take around 40 to 50 minutes to create all the resources.
+**Step 3** - After that main stack can be created using the template "staticwebsite.yaml". It might take around 40 to 50 minutes to create all the resources.
 
 ```bash
 aws cloudformation create-stack --stack-name {stackname} --template-body file://{path_to_template_file} --capabilities CAPABILITY_IAM --parameters ParameterKey=DomainName, ParameterValue={basedomain} ParameterKey=PreExistingHostedZoneDomain, ParameterValue={hosted zone}  ParameterKey=PreExistingHostedZoneId, ParameterValue={hosted zone id} ParameterKey=ProjectName, ParameterValue={project name}
