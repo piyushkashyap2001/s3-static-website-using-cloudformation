@@ -34,7 +34,7 @@ This repository contains an AWS Cloudformation template and other necessary lamb
 aws cloudformation create-stack --stack-name {stackname} --template-body file://{path_to_template_file}
 ```
 
-**Step 2** - Upload all the lambda zip code files to the bucket created in above step using following AWS CLI command.
+**Step 2** - Upload all the lambda zip files within Lambdas folder to the bucket created in above step using following AWS CLI command.
 
 ```bash
  aws s3 cp {folder path}/ s3://{bucketname}/lambdas/ --recursive
