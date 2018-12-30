@@ -55,7 +55,7 @@ aws cloudformation describe-stack-events --stack-name {stackname}
 
 **Step 4** - Once the stack is created, the output of stack will provide the site bucket name, Kibana url, CodeCommit url, Cognito user pool id.
 
-- Use AWS Codecommit url to clone the repository.
+- Use AWS Codecommit url to clone the repository and push the static website code.
 - Create a new user profile in the user pool to access Kibana using the following command.
 
 ```bash
