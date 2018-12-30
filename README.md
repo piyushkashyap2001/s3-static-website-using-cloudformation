@@ -56,7 +56,6 @@ aws cloudformation describe-stack-events --stack-name {stackname}
 **Step 4** - Once the stack is created, the output of stack will provide the site bucket name, Kibana url, CodeCommit url, Cognito user pool id.
 
 - Use AWS Codecommit url to clone the repository.
-- Replace the bucket name in buildspec.yml file with the site bucket name.
 - Create a new user profile in the user pool to access Kibana using the following command.
 
 ```bash
@@ -68,7 +67,7 @@ aws cognito-idp admin-create-user --user-pool-id {userpoolid} --username {userna
 
 ## Important Notes
 
-- As soon as the code is pushed to AWS Codecommit, AWS Codepipeline is triggered by the push , then it uses AWS CodeBuild to build the code & finally AWS CodeBuild copies the file to S3 site bucket. The static website code must have a buildspec.yml file at the root level of folder structure in order to have AWS CodeBuild install the dependencies and move the files to S3 site bucket.
+- As soon as the code is pushed to AWS Codecommit, AWS Codepipeline is triggered by the push , then it uses AWS CodeBuild to build the code & finally AWS CodeBuild copies the file to S3 site bucket.
 
 - The template fully automates the provisioning of certificate including validation. It uses DNS validation method to validate the certificate. In order to use ACM Certificate with Cloudfront distribution, the certificate will be created in us-east-1 region only.
 
