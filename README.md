@@ -67,7 +67,7 @@ aws cognito-idp admin-create-user --user-pool-id {userpoolid} --username {userna
 
 ## Important Notes
 
-- As soon as the code is pushed to AWS Codecommit, AWS Codepipeline is triggered by the push , then it uses AWS CodeBuild to build the code & finally AWS CodeBuild copies the file to S3 site bucket.
+- As soon as the code is pushed to AWS Codecommit, AWS Codepipeline is triggered by the push , then it uses AWS CodeBuild to build the code & finally AWS CodeBuild copies the files to S3 site bucket.
 
 - The template fully automates the provisioning of certificate including validation. It uses DNS validation method to validate the certificate. In order to use ACM Certificate with Cloudfront distribution, the certificate will be created in us-east-1 region only.
 
