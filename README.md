@@ -37,7 +37,7 @@ aws cloudformation create-stack --stack-name {stackname} --template-body file://
 **Step 2** - Upload all the lambda zip files within Lambdas folder to the bucket created in above step using following AWS CLI command.
 
 ```bash
- aws s3 cp {folder path}/ s3://{bucketname}/lambdas/ --recursive
+ aws s3 cp {lambdas folder path}/ s3://{bucketname}/lambdas/ --recursive
 ```
 
 **Step 3** - After that main stack can be created using the template "staticwebsite.yaml". It might take around 40 to 50 minutes to create all the resources.
